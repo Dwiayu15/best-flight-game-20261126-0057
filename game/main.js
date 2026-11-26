@@ -707,3 +707,477 @@ function drawChasePlane() {
   ctx.restore();
   ctx.restore();
 }
+
+// ------------------------------------------------------------- cockpit
+function dial(cx, cy, r, frac, label, text, warn = false) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, TAU);
+  ctx.fillStyle = '#141a26';
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = warn ? '#ff5a48' : '#8fa8c8';
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(220,232,255,0.75)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i <= 10; i++) {
+    const a = Math.PI * 0.75 + (i / 10) * Math.PI * 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * (r - 7), cy + Math.sin(a) * (r - 7));
+    ctx.lineTo(cx + Math.cos(a) * (r - 2.5), cy + Math.sin(a) * (r - 2.5));
+    ctx.stroke();
+  }
+  const a = Math.PI * 0.75 + Math.max(0, Math.min(1, frac)) * Math.PI * 1.5;
+  ctx.strokeStyle = '#ffd76a';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + Math.cos(a) * (r - 10), cy + Math.sin(a) * (r - 10));
+  ctx.stroke();
+  ctx.fillStyle = '#ffd76a';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 3.4, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = '#cfe0f4';
+  ctx.font = 'bold 11px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, cx, cy + r + 14);
+  ctx.font = 'bold 14px ui-monospace, monospace';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(text, cx, cy + r * 0.52);
+  ctx.restore();
+}
+
+function drawCockpit() {
+  // Panel: a dark dash across the bottom of the screen with a coaming
+  // curve, two side posts, and the instruments set into it.
+  ctx.fillStyle = 'rgba(16,20,30,0.92)';
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  ctx.lineTo(0, H - 128);
+  ctx.quadraticCurveTo(CX, H - 188, W, H - 128);
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(120,140,180,0.5)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, H - 128);
+  ctx.quadraticCurveTo(CX, H - 188, W, H - 128);
+  ctx.stroke();
+  // Side posts.
+  ctx.fillStyle = 'rgba(16,20,30,0.9)';
+  ctx.fillRect(0, 0, 26, H - 140);
+  ctx.fillRect(W - 26, 0, 26, H - 140);
+
+  const gy = H - 66;
+  // Artificial horizon.
+  const hx = 300;
+  const hr = 52;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(hx, gy, hr, 0, TAU);
+  ctx.clip();
+  ctx.translate(hx, gy);
+  ctx.rotate(-plane.roll);
+  ctx.translate(0, plane.pitch * 90);
+  ctx.fillStyle = '#79a8d8';
+  ctx.fillRect(-hr - 30, -hr - 90, (hr + 30) * 2, hr + 90);
+  ctx.fillStyle = '#8a6b42';
+  ctx.fillRect(-hr - 30, 0, (hr + 30) * 2, hr + 90);
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  ctx.lineWidth = 1.4;
+  for (const off of [-24, -12, 12, 24]) {
+    ctx.beginPath();
+    ctx.moveTo(off % 24 === 0 ? -16 : -9, off);
+    ctx.lineTo(off % 24 === 0 ? 16 : 9, off);
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.beginPath();
+  ctx.arc(hx, gy, hr, 0, TAU);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = '#8fa8c8';
+  ctx.stroke();
+  // Fixed aircraft symbol over the horizon.
+  ctx.strokeStyle = '#ffd76a';
+  ctx.lineWidth = 3.4;
+  ctx.beginPath();
+  ctx.moveTo(hx - 30, gy);
+  ctx.lineTo(hx - 9, gy);
+  ctx.lineTo(hx - 9, gy + 7);
+  ctx.moveTo(hx + 30, gy);
+  ctx.lineTo(hx + 9, gy);
+  ctx.lineTo(hx + 9, gy + 7);
+  ctx.stroke();
+  ctx.fillStyle = '#cfe0f4';
+  ctx.font = 'bold 11px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('ATTITUDE', hx, gy + hr + 14);
+
+  const knots = Math.round(plane.speed * 1.944);
+  const feet = Math.max(0, Math.round((plane.z - GEAR) * 3.281));
+  dial(520, gy, 52, plane.speed / 62, 'AIRSPEED', `${knots} kt`, plane.stalled);
+  dial(740, gy, 52, (plane.z - GEAR) / 200, 'ALTITUDE', `${feet} ft`);
+  // Vertical speed as a slim bar gauge.
+  const vx = 940;
+  ctx.fillStyle = '#141a26';
+  rr(vx - 17, gy - 52, 34, 104, 6);
+  ctx.fill();
+  ctx.strokeStyle = '#8fa8c8';
+  ctx.lineWidth = 2;
+  rr(vx - 17, gy - 52, 34, 104, 6);
+  ctx.stroke();
+  const vsi = Math.max(-1, Math.min(1, plane.vz / 14));
+  ctx.fillStyle = vsi >= 0 ? '#8fe08a' : '#ff9a5a';
+  const bh = Math.abs(vsi) * 48;
+  ctx.fillRect(vx - 11, vsi >= 0 ? gy - bh : gy, 22, bh);
+  ctx.fillStyle = '#cfe0f4';
+  ctx.font = 'bold 11px ui-monospace, monospace';
+  ctx.fillText('VERT SPD', vx, gy + 66);
+  ctx.font = 'bold 13px ui-monospace, monospace';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`${plane.vz >= 0 ? '+' : ''}${Math.round(plane.vz * 196.85 / 10) * 10}`, vx, gy - 62);
+  // Throttle quadrant readout.
+  ctx.fillStyle = '#cfe0f4';
+  ctx.font = 'bold 11px ui-monospace, monospace';
+  ctx.fillText('THROTTLE', 1085, gy + 66);
+  ctx.fillStyle = '#2a3348';
+  rr(1040, gy - 52, 90, 16, 7);
+  ctx.fill();
+  ctx.fillStyle = '#ffd76a';
+  if (plane.throttle > 0.02) {
+    rr(1040, gy - 52, 90 * plane.throttle, 16, 7);
+    ctx.fill();
+  }
+  ctx.font = 'bold 13px ui-monospace, monospace';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`${Math.round(plane.throttle * 100)}%`, 1085, gy - 46 + 34);
+}
+
+// ------------------------------------------------------------------ HUD
+function drawHUD() {
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 21px Georgia, serif';
+  ctx.fillStyle = 'rgba(10,16,26,0.45)';
+  rr(18, 16, 252, 96, 10);
+  ctx.fill();
+  ctx.fillStyle = '#ffe9b0';
+  ctx.fillText(`Score  ${state.score}`, 34, 48);
+  ctx.font = '16px Georgia, serif';
+  ctx.fillStyle = '#dfeaf6';
+  ctx.fillText(`Rings  ${Math.min(state.nextRing, world.rings.length)} / ${world.rings.length}`, 34, 76);
+  const mult = Math.min(3, 1 + 0.25 * Math.max(0, state.streak - 1));
+  ctx.fillText(state.streak > 1 ? `Streak ×${mult.toFixed(2)} (${state.streak})` : 'Streak —', 34, 100);
+
+  // Clock and heading, top right / top centre.
+  ctx.textAlign = 'right';
+  ctx.font = 'bold 21px Georgia, serif';
+  ctx.fillStyle = '#ffe9b0';
+  const mm = String(Math.floor(state.elapsed / 60)).padStart(2, '0');
+  const ss = String(Math.floor(state.elapsed % 60)).padStart(2, '0');
+  ctx.fillText(`${mm}:${ss}`, W - 30, 46);
+  ctx.textAlign = 'center';
+  const hdg = ((Math.round(plane.heading * 180 / Math.PI) % 360) + 360) % 360;
+  const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  ctx.font = 'bold 19px ui-monospace, monospace';
+  ctx.fillStyle = 'rgba(10,16,26,0.45)';
+  rr(CX - 92, 16, 184, 40, 9);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`${cardinals[Math.round(hdg / 45) % 8]} ${String(hdg).padStart(3, '0')}°`, CX, 44);
+
+  // Guide arrow to the next ring (or the runway when the course is done).
+  let tx;
+  let ty;
+  let tz;
+  let label;
+  if (state.nextRing < world.rings.length) {
+    const r = world.rings[state.nextRing];
+    tx = r.x; ty = r.y; tz = r.z; label = `ring ${state.nextRing + 1}`;
+  } else {
+    tx = world.runway.x; ty = world.runway.y + 60; tz = world.runway.z + 6; label = 'runway';
+  }
+  const dx = tx - plane.x;
+  const dy = ty - plane.y;
+  const dist = Math.round(Math.sqrt(dx * dx + dy * dy));
+  let rel = Math.atan2(dx, dy) - plane.heading;
+  while (rel > Math.PI) rel -= TAU;
+  while (rel < -Math.PI) rel += TAU;
+  ctx.save();
+  ctx.translate(CX, 96);
+  ctx.rotate(Math.max(-1.2, Math.min(1.2, rel)));
+  ctx.fillStyle = Math.abs(rel) < 0.2 ? '#ffd76a' : 'rgba(255,240,200,0.75)';
+  ctx.beginPath();
+  ctx.moveTo(0, -13);
+  ctx.lineTo(8, 8);
+  ctx.lineTo(0, 3);
+  ctx.lineTo(-8, 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+  ctx.font = '14px Georgia, serif';
+  ctx.fillStyle = '#ffeec4';
+  ctx.fillText(`${label} · ${dist} m`, CX, 128);
+
+  // Crosshair in cockpit view.
+  if (view === 'cockpit') {
+    ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(CX, CY - 30, 11, 0, TAU);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(CX - 20, CY - 30);
+    ctx.lineTo(CX - 14, CY - 30);
+    ctx.moveTo(CX + 14, CY - 30);
+    ctx.lineTo(CX + 20, CY - 30);
+    ctx.stroke();
+  }
+
+  if (plane.stalled && state.mode === 'flying' && Math.sin(state.time * 9) > -0.2) {
+    ctx.font = 'bold 34px Georgia, serif';
+    ctx.fillStyle = '#ff6a55';
+    ctx.fillText('STALL', CX, 168);
+    ctx.font = '16px Georgia, serif';
+    ctx.fillStyle = '#ffe2d8';
+    ctx.fillText('nose down (↓) and add throttle (W)', CX, 192);
+  }
+
+  if (state.toast && state.time < state.toastUntil) {
+    ctx.font = 'bold 22px Georgia, serif';
+    const w = ctx.measureText(state.toast).width + 44;
+    ctx.fillStyle = 'rgba(10,16,26,0.55)';
+    rr(CX - w / 2, H - 218, w, 42, 10);
+    ctx.fill();
+    ctx.fillStyle = '#ffe9b0';
+    ctx.fillText(state.toast, CX, H - 189);
+  }
+}
+
+// --------------------------------------------------------------- screens
+function panel(w, h) {
+  ctx.fillStyle = 'rgba(12,16,28,0.78)';
+  rr(CX - w / 2, CY - h / 2, w, h, 16);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,215,130,0.5)';
+  ctx.lineWidth = 1.6;
+  rr(CX - w / 2, CY - h / 2, w, h, 16);
+  ctx.stroke();
+}
+
+function drawTitle() {
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 64px Georgia, serif';
+  ctx.fillStyle = '#fff2cf';
+  ctx.shadowColor = 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur = 14;
+  ctx.fillText('Golden Hour Ring Run', CX, 168);
+  ctx.shadowBlur = 0;
+  ctx.font = 'italic 21px Georgia, serif';
+  ctx.fillStyle = '#ffe4ae';
+  ctx.fillText('a seaplane, ten gold rings, and one strip of runway to come home to', CX, 206);
+  panel(620, 252);
+  ctx.font = '18px Georgia, serif';
+  ctx.fillStyle = '#e8eefc';
+  const lines = [
+    'Take off north, thread the glowing rings in order,',
+    'then land gently on the home runway for a bonus.',
+    '',
+    '↑ ↓ pitch · ← → bank · W/S throttle · mouse steers too',
+    'C cockpit / chase view · P pause · M mute · R restart',
+    '',
+  ];
+  lines.forEach((ln, i) => ctx.fillText(ln, CX, CY - 88 + i * 27));
+  ctx.font = 'bold 22px Georgia, serif';
+  ctx.fillStyle = '#ffd76a';
+  const blink = Math.sin(state.time * 3) > -0.4;
+  if (blink) ctx.fillText('Press ENTER or click to fly', CX, CY + 96);
+}
+
+function drawEndScreen() {
+  ctx.textAlign = 'center';
+  panel(600, 330);
+  if (state.mode === 'landed') {
+    ctx.font = 'bold 40px Georgia, serif';
+    ctx.fillStyle = '#b8f0ae';
+    ctx.fillText('Down and home.', CX, CY - 118);
+    ctx.font = '19px Georgia, serif';
+    ctx.fillStyle = '#e8eefc';
+    const rows = [
+      [`Rings`, `${state.ringScore}`],
+      [`Landing — ${state.landingGrade.toLowerCase()}`, `${state.landingBonus}`],
+      [`Time bonus`, `${state.timeBonus}`],
+      [`Best streak`, `×${Math.min(3, 1 + 0.25 * Math.max(0, state.bestStreak - 1)).toFixed(2)} (${state.bestStreak})`],
+    ];
+    rows.forEach(([k, v], i) => {
+      ctx.textAlign = 'left';
+      ctx.fillText(k, CX - 220, CY - 62 + i * 32);
+      ctx.textAlign = 'right';
+      ctx.fillText(v, CX + 220, CY - 62 + i * 32);
+      ctx.textAlign = 'center';
+    });
+    ctx.font = 'bold 30px Georgia, serif';
+    ctx.fillStyle = '#ffd76a';
+    ctx.fillText(`Total  ${state.score}`, CX, CY + 92);
+  } else {
+    ctx.font = 'bold 40px Georgia, serif';
+    ctx.fillStyle = '#ff9a7a';
+    ctx.fillText('Flight over', CX, CY - 100);
+    ctx.font = '19px Georgia, serif';
+    ctx.fillStyle = '#e8eefc';
+    wrapText(state.crashReason, CX, CY - 52, 500, 27);
+    ctx.fillText(`Rings flown: ${Math.min(state.nextRing, world.rings.length)} of ${world.rings.length}`, CX, CY + 30);
+    ctx.font = 'bold 30px Georgia, serif';
+    ctx.fillStyle = '#ffd76a';
+    ctx.fillText(`Score  ${state.score}`, CX, CY + 78);
+  }
+  ctx.font = 'bold 20px Georgia, serif';
+  ctx.fillStyle = '#ffe9b0';
+  ctx.fillText('Press R to fly again', CX, CY + 138);
+}
+
+function wrapText(text, x, y, maxW, lh) {
+  const words = text.split(' ');
+  let line = '';
+  let yy = y;
+  for (const word of words) {
+    const test = line ? `${line} ${word}` : word;
+    if (ctx.measureText(test).width > maxW && line) {
+      ctx.fillText(line, x, yy);
+      line = word;
+      yy += lh;
+    } else {
+      line = test;
+    }
+  }
+  if (line) ctx.fillText(line, x, yy);
+}
+
+function drawPaused() {
+  ctx.fillStyle = 'rgba(8,10,18,0.5)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 44px Georgia, serif';
+  ctx.fillStyle = '#fff2cf';
+  ctx.fillText('Paused', CX, CY - 10);
+  ctx.font = '19px Georgia, serif';
+  ctx.fillStyle = '#dfeaf6';
+  ctx.fillText('P to resume', CX, CY + 28);
+}
+
+// ----------------------------------------------------------------- loop
+let lastTs = 0;
+
+function frame(ts) {
+  const now = ts / 1000;
+  let dt = Math.min(0.05, now - (lastTs || now));
+  lastTs = now;
+  state.time += dt;
+
+  if (state.mode === 'flying' && !state.paused) updateFlight(dt);
+  else if (state.mode === 'title') plane.propAngle += dt * 2;
+
+  // Camera choice.
+  let c;
+  if (state.mode === 'title') {
+    const a = state.time * 0.05;
+    c = { x: Math.sin(a) * 760, y: Math.cos(a) * 760, z: 130, heading: a + Math.PI, pitch: -0.13, roll: 0 };
+    // Face the island centre: heading is measured from north, and the
+    // camera sits at angle a around the centre, so it looks along a+π.
+    c.heading = Math.atan2(-c.x, -c.y);
+  } else if (view === 'cockpit' && state.mode === 'flying') {
+    c = {
+      x: plane.x + Math.sin(plane.heading) * 1.5,
+      y: plane.y + Math.cos(plane.heading) * 1.5,
+      z: plane.z + 1.35,
+      heading: plane.heading,
+      pitch: plane.pitch,
+      roll: plane.roll,
+    };
+    cam.x = c.x; cam.y = c.y; cam.z = c.z;
+    cam.heading = c.heading; cam.pitch = c.pitch; cam.roll = c.roll;
+  } else {
+    const off = chaseOffset();
+    const k = 1 - Math.exp(-dt * 5.5);
+    cam.x += (plane.x + off.x - cam.x) * k;
+    cam.y += (plane.y + off.y - cam.y) * k;
+    cam.z += (plane.z + off.z - cam.z) * k;
+    cam.heading = plane.heading;
+    cam.pitch += (plane.pitch * 0.7 - cam.pitch) * k;
+    cam.roll += (plane.roll * 0.55 - cam.roll) * k;
+    c = cam;
+  }
+
+  setBasis(c);
+  drawSkyAndSea(c);
+  drawClouds(c);
+  drawIslands(c);
+  drawRunway(c);
+  drawRings(c);
+  if (state.mode !== 'title') drawPlaneShadow(c);
+
+  if (state.mode === 'title') {
+    drawTitle();
+  } else {
+    if (view === 'chase') drawChasePlane();
+    if (view === 'cockpit' && state.mode === 'flying') drawCockpit();
+    drawHUD();
+    if (state.mode === 'crashed' || state.mode === 'landed') drawEndScreen();
+    if (state.paused) drawPaused();
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// ------------------------------------------------------- staged entries
+// ?shot=play: mid-course, chase view, two rings already flown.
+function stagePlay() {
+  resetFlight();
+  const ring = world.rings[2];
+  const fx = Math.sin(ring.heading);
+  const fy = Math.cos(ring.heading);
+  plane.x = ring.x - fx * 150;
+  plane.y = ring.y - fy * 150;
+  plane.z = ring.z + 3;
+  plane.heading = ring.heading;
+  plane.pitch = 0.02;
+  plane.speed = 37;
+  plane.throttle = 0.68;
+  plane.onGround = false;
+  state.nextRing = 2;
+  state.ringScore = 475;
+  state.score = 475;
+  state.streak = 2;
+  state.bestStreak = 2;
+  state.elapsed = 52;
+  view = 'chase';
+  prevRingSide = -140;
+  snapCamera();
+}
+
+// ?shot=end: parked on the strip after a clean, complete flight.
+function stageEnd() {
+  resetFlight();
+  state.nextRing = world.rings.length;
+  state.ringScore = 2350;
+  state.score = state.ringScore;
+  state.bestStreak = 7;
+  state.streak = 7;
+  state.elapsed = 183;
+  plane.x = world.runway.x;
+  plane.y = world.runway.y + 30;
+  plane.z = world.runway.z + GEAR;
+  plane.speed = 0;
+  plane.throttle = 0;
+  plane.onGround = true;
+  view = 'chase';
+  finishLanding(0.9);
+  snapCamera();
+}
+
+if (shot === 'play') stagePlay();
+else if (shot === 'end') stageEnd();
+else state.mode = 'title';
+
+requestAnimationFrame(frame);
