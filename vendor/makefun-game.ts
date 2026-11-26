@@ -22,7 +22,7 @@
 //   htmlFacts(html)             a page's <script>, <link>, <img>, <source>, <video>, <audio> and <iframe>
 //                               tags and its <script type="importmap"> blocks, in document order, attributes parsed
 //   importMapOf(facts)          the page's import map, parsed (imports and scopes, a null value allowed): none when
-//                               the page has none, or why one it has cannot be used
+//                               the page has none (an import map is optional), or why one it has cannot be used
 //   isRelativeRef(ref)          whether a reference is relative: no scheme, no leading // and no leading /
 //   isRelativeSpecifier(name)   whether a module specifier is relative in JavaScript's sense (./ or ../): a bare
 //                               name such as "phaser" is not, whatever the import map then makes of it
@@ -35,7 +35,8 @@
 //   mappedSpecifier(map, name, from)
 //                               the value an import map gives a bare specifier: an exact key, else the longest key
 //                               ending in / that prefixes it, a matching scope's map first; null when none or blocked
-//   sourceImports(text)         a module's static import and export-from specifiers, in source order, by a lexical scan (the gate's own check parses the module, see below)
+//   sourceImports(text)         a module's static import and export-from specifiers, in source order, by a
+//                               lexical scan (the gate's own check parses the module, see below)
 //   importOrder(sources, facts) the source scripts in the order the page loads them: index.html's scripts in
 //                               document order, a classic <script src> where it stands, a module script (inline
 //                               or src) followed by a depth-first walk of its static imports, specifiers resolved
@@ -899,7 +900,7 @@ function isClassicScript(type: string): boolean {
  * (<script type="module">), its src or its inline text's imports, followed by a depth-first walk of static imports,
  * each reached module's own imports in source order, the first time a path is reached. A classic script's src is
  * resolved relative to index.html, and its text is not walked (a classic script has no static imports); a module's
- * specifiers are resolved relative to the importer or through the import map (the importing module's
+ * specifiers are resolved relative to the importer or through the page's import map (the importing module's
  * matching scope's entry or the top-level one; a value resolves against index.html). A reference that resolves to
  * no source JS file is skipped, a script of another type (a shader's text, JSON data) is passed over, and a file
  * reached once is never listed or walked twice. `sources` is every source file of game/ (index.html included, which
