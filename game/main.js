@@ -393,3 +393,317 @@ function project(c, x, y, z) {
   const sy = dx * camBasis.ux + dy * camBasis.uy + dz * camBasis.uz;
   return { x: CX + (sx / depth) * FOCAL, y: CY - (sy / depth) * FOCAL, d: depth };
 }
+
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawSkyAndSea(c) {
+  // Sky: a golden-hour gradient, fixed to the screen.
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#2e4a7a');
+  sky.addColorStop(0.42, '#7fa8c9');
+  sky.addColorStop(0.62, '#f2b879');
+  sky.addColorStop(0.78, '#f7cf8e');
+  sky.addColorStop(1, '#e8906a');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // Sea: everything below the horizon line, which pitches and rolls
+  // with the plane. Drawn as a rotated half-plane around screen centre.
+  const horizonY = CY + Math.tan(c.pitch) * FOCAL;
+  ctx.save();
+  ctx.translate(CX, horizonY);
+  ctx.rotate(-c.roll * 0.9);
+  const sea = ctx.createLinearGradient(0, 0, 0, H);
+  sea.addColorStop(0, '#e9a05f');
+  sea.addColorStop(0.12, '#4f86a8');
+  sea.addColorStop(0.5, '#2c6489');
+  sea.addColorStop(1, '#173f5e');
+  ctx.fillStyle = sea;
+  ctx.fillRect(-W, 0, W * 2, H * 1.6);
+  ctx.restore();
+
+  // The sun, low in the west-northwest, with a warm halo — projected
+  // like any other far point so it swings across the sky as you turn.
+  const sunDir = { x: -0.62, y: 0.55, z: 0.22 };
+  const sp = project(c, c.x + sunDir.x * 5000, c.y + sunDir.y * 5000, c.z + sunDir.z * 5000);
+  if (sp) {
+    const glow = ctx.createRadialGradient(sp.x, sp.y, 4, sp.x, sp.y, 190);
+    glow.addColorStop(0, 'rgba(255,236,180,0.95)');
+    glow.addColorStop(0.18, 'rgba(255,205,120,0.55)');
+    glow.addColorStop(1, 'rgba(255,190,110,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, 190, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = '#fff3cf';
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, 26, 0, TAU);
+    ctx.fill();
+  }
+
+  // Sparkle on the water: short dashes that shimmer as time passes,
+  // seeded per dash so they twinkle instead of crawling.
+  ctx.strokeStyle = 'rgba(255,220,160,0.5)';
+  ctx.lineWidth = 2;
+  const bandTop = Math.max(0, horizonY + 6);
+  for (let i = 0; i < 64; i++) {
+    const hx = Math.sin(i * 127.1) * 0.5 + 0.5;
+    const hy = Math.sin(i * 311.7) * 0.5 + 0.5;
+    const tw = 0.5 + 0.5 * Math.sin(state.time * 2.4 + i * 2.3);
+    if (tw < 0.45) continue;
+    const y = bandTop + hy * hy * (H - bandTop) * 0.85;
+    const x = hx * W + Math.sin(state.time * 0.7 + i) * 6;
+    ctx.globalAlpha = 0.16 + tw * 0.3;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 8 + hy * 20, y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawClouds(c) {
+  const sorted = [...world.clouds].sort((a, b) => distTo(c, b) - distTo(c, a));
+  for (const cl of sorted) {
+    const p = project(c, cl.x, cl.y, cl.z);
+    if (!p || p.d > 4200) continue;
+    const s = (cl.s / p.d) * FOCAL;
+    if (s < 6) continue;
+    ctx.fillStyle = 'rgba(255,244,230,0.75)';
+    for (const [ox, oy, os] of [[0, 0, 1], [-0.7, 0.14, 0.62], [0.72, 0.12, 0.66], [0.1, -0.22, 0.55]]) {
+      ctx.beginPath();
+      ctx.ellipse(p.x + ox * s, p.y + oy * s * 0.4, s * os, s * os * 0.34, 0, 0, TAU);
+      ctx.fill();
+    }
+  }
+}
+
+function distTo(c, p) {
+  const dx = p.x - c.x;
+  const dy = p.y - c.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function discPoints(c, cx, cy, z, r, n = 16) {
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TAU;
+    const p = project(c, cx + Math.cos(a) * r, cy + Math.sin(a) * r, z);
+    if (!p) return null;
+    pts.push(p);
+  }
+  return pts;
+}
+
+function fillPoly(pts, style) {
+  if (!pts || pts.length < 3) return;
+  // project() answers null for a point behind the camera, and a polygon
+  // with a hole in it is skipped whole rather than drawn torn.
+  if (pts.some((p) => !p)) return;
+  ctx.fillStyle = style;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawIslands(c) {
+  const sorted = [...world.islands].sort((a, b) => distTo(c, b) - distTo(c, a));
+  for (const isl of sorted) {
+    if (distTo(c, isl) > 4600) continue;
+    // Three stacked layers per blob: wet sand, grass, high ground.
+    for (const b of isl.blobs) {
+      const bx = isl.x + b.dx;
+      const by = isl.y + b.dy;
+      fillPoly(discPoints(c, bx, by, 0.7, b.r), '#dfc491');
+      fillPoly(discPoints(c, bx, by, 1.6, b.r * 0.86), '#5f9e57');
+      if (isl.peak > 5) fillPoly(discPoints(c, bx, by, 1.6 + isl.peak * 0.5, b.r * 0.52), '#487f47');
+    }
+    // Palms: a bent trunk and a star of fronds, sized by distance.
+    for (const palm of isl.palms) {
+      const base = project(c, palm.x, palm.y, groundHeight(world, palm.x, palm.y));
+      if (!base || base.d > 1500) continue;
+      const s = (FOCAL / base.d) * palm.s * 7;
+      ctx.strokeStyle = 'rgba(46,74,38,0.9)';
+      ctx.lineWidth = Math.max(1, s * 0.09);
+      ctx.beginPath();
+      ctx.moveTo(base.x, base.y);
+      ctx.quadraticCurveTo(base.x + s * 0.16, base.y - s * 0.6, base.x + s * 0.3, base.y - s);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(38,96,44,0.95)';
+      for (let f = 0; f < 5; f++) {
+        const a = -0.3 - f * 0.55;
+        ctx.beginPath();
+        ctx.moveTo(base.x + s * 0.3, base.y - s);
+        ctx.quadraticCurveTo(
+          base.x + s * 0.3 + Math.cos(a) * s * 0.5,
+          base.y - s + Math.sin(a) * s * 0.4 - s * 0.12,
+          base.x + s * 0.3 + Math.cos(a) * s * 0.85,
+          base.y - s + Math.sin(a) * s * 0.6 + s * 0.22,
+        );
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+function drawRunway(c) {
+  const r = world.runway;
+  const hw = r.width / 2;
+  const hl = r.length / 2;
+  const corners = [
+    [r.x - hw, r.y - hl], [r.x + hw, r.y - hl], [r.x + hw, r.y + hl], [r.x - hw, r.y + hl],
+  ].map(([x, y]) => project(c, x, y, r.z + 0.06));
+  if (corners.every(Boolean)) {
+    fillPoly(corners, '#5b5f6b');
+    // Centreline dashes and threshold bars.
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([14, 12]);
+    const a = project(c, r.x, r.y - hl + 8, r.z + 0.08);
+    const b = project(c, r.x, r.y + hl - 8, r.z + 0.08);
+    if (a && b) {
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+}
+
+function drawRings(c) {
+  world.rings.forEach((ring, i) => {
+    const done = i < state.nextRing;
+    const isNext = i === state.nextRing;
+    const centre = project(c, ring.x, ring.y, ring.z);
+    if (!centre || centre.d > 3800) return;
+    const ax = Math.cos(ring.heading);
+    const ay = -Math.sin(ring.heading);
+    const pts = [];
+    for (let k = 0; k <= 28; k++) {
+      const a = (k / 28) * TAU;
+      const p = project(
+        c,
+        ring.x + ax * Math.cos(a) * ring.r,
+        ring.y + ay * Math.cos(a) * ring.r,
+        ring.z + Math.sin(a) * ring.r,
+      );
+      if (!p) return;
+      pts.push(p);
+    }
+    const pulse = isNext ? 0.72 + 0.28 * Math.sin(state.time * 4) : 1;
+    ctx.lineWidth = isNext ? 5 : 3;
+    ctx.strokeStyle = done
+      ? 'rgba(120,220,140,0.4)'
+      : isNext
+        ? `rgba(255,196,64,${0.95 * pulse})`
+        : 'rgba(170,220,235,0.55)';
+    ctx.shadowColor = isNext ? 'rgba(255,180,50,0.9)' : 'transparent';
+    ctx.shadowBlur = isNext ? 16 : 0;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k].x, pts[k].y);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    if (isNext && centre.d > 60) {
+      ctx.fillStyle = 'rgba(255,214,110,0.95)';
+      ctx.font = 'bold 15px Georgia, serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`RING ${i + 1}`, centre.x, centre.y - ring.r * (FOCAL / centre.d) - 10);
+    }
+  });
+}
+
+function drawPlaneShadow(c) {
+  const g = groundHeight(world, plane.x, plane.y);
+  const p = project(c, plane.x, plane.y, g + 0.4);
+  if (!p) return;
+  const alt = Math.max(0, plane.z - g);
+  const s = (FOCAL / p.d) * 9 * Math.max(0.25, 1 - alt / 160);
+  ctx.fillStyle = `rgba(10,20,30,${Math.max(0.05, 0.4 - alt / 300)})`;
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y, s * 1.7, s * 0.55, -plane.heading + cam.heading, 0, TAU);
+  ctx.fill();
+}
+
+// The seaplane from behind, drawn around screen centre in chase view:
+// broad wing, twin floats, a tail held high, and the propeller a
+// shimmering disc at the far end of the fuselage.
+function drawChasePlane() {
+  const bob = Math.sin(state.time * 2.1) * 2.2;
+  ctx.save();
+  ctx.translate(CX, CY + 88 + bob);
+  ctx.rotate(plane.roll * 0.85);
+  const s = 1.0;
+  ctx.lineJoin = 'round';
+
+  // Floats and their struts.
+  ctx.fillStyle = '#e8e4da';
+  for (const fx of [-34, 34]) {
+    rr(fx - 7 * s, 30 * s, 14 * s, 34 * s, 6);
+    ctx.fill();
+    ctx.strokeStyle = '#7a4a2b';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(fx, 30 * s);
+    ctx.lineTo(fx * 0.45, 6 * s);
+    ctx.stroke();
+  }
+  // Wing, shoulder-mounted and broad.
+  const wingGrad = ctx.createLinearGradient(-118, 0, 118, 0);
+  wingGrad.addColorStop(0, '#c94f38');
+  wingGrad.addColorStop(0.5, '#e4674a');
+  wingGrad.addColorStop(1, '#c94f38');
+  ctx.fillStyle = wingGrad;
+  rr(-118 * s, -16 * s, 236 * s, 17 * s, 8);
+  ctx.fill();
+  // Fuselage, tail toward the viewer (wider, lower) and nose away.
+  ctx.fillStyle = '#f0ead9';
+  ctx.beginPath();
+  ctx.moveTo(-13 * s, 26 * s);
+  ctx.quadraticCurveTo(-16 * s, -6 * s, -6 * s, -34 * s);
+  ctx.lineTo(6 * s, -34 * s);
+  ctx.quadraticCurveTo(16 * s, -6 * s, 13 * s, 26 * s);
+  ctx.quadraticCurveTo(0, 34 * s, -13 * s, 26 * s);
+  ctx.fill();
+  ctx.fillStyle = '#31556e';
+  ctx.beginPath(); // canopy
+  ctx.ellipse(0, -14 * s, 7.5 * s, 13 * s, 0, 0, TAU);
+  ctx.fill();
+  // Tailplane and fin, close to the camera.
+  ctx.fillStyle = '#c94f38';
+  rr(-40 * s, 18 * s, 80 * s, 10 * s, 5);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(-4 * s, 24 * s);
+  ctx.lineTo(0, 2 * s);
+  ctx.lineTo(4 * s, 24 * s);
+  ctx.closePath();
+  ctx.fill();
+  // Propeller disc at the nose, spinning with throttle.
+  ctx.save();
+  ctx.translate(0, -38 * s);
+  ctx.fillStyle = 'rgba(230,230,220,0.18)';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 30 * s, 7 * s, 0, 0, TAU);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(60,50,40,0.75)';
+  ctx.lineWidth = 3.4;
+  const pa = plane.propAngle;
+  ctx.beginPath();
+  ctx.moveTo(Math.cos(pa) * -30 * s, Math.sin(pa) * -6 * s);
+  ctx.lineTo(Math.cos(pa) * 30 * s, Math.sin(pa) * 6 * s);
+  ctx.stroke();
+  ctx.restore();
+  ctx.restore();
+}
