@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Golden Hour Ring Run — a seaplane flight game</title>
+<style>
+  /* The whole game is drawn on one canvas; the page around it is just a
+     dark frame and a caption line, so nothing here can steal focus or
+     scroll while flying. */
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #10131f;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: Georgia, 'Times New Roman', serif;
+    color: #d8c9a3;
+  }
+  #frame {
+    position: relative;
+    width: min(1280px, 100vw);
+    aspect-ratio: 16 / 9;
+    max-height: calc(100vh - 44px);
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.65);
+    border: 1px solid #2c3350;
+    background: #000;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+    touch-action: none;
+  }
+  #caption {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    font-size: 14px;
+    letter-spacing: 0.06em;
+    opacity: 0.85;
+    user-select: none;
+  }
+  #caption b { color: #f4e3b2; font-weight: normal; }
+</style>
+</head>
+<body>
+  <div id="frame">
+    <canvas id="sky" width="1280" height="720"></canvas>
+  </div>
+  <div id="caption">
+    <span><b>Golden Hour Ring Run</b></span>
+    <span>arrows steer &middot; W/S throttle &middot; mouse steers too</span>
+    <span>C view &middot; P pause &middot; M mute &middot; R restart</span>
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
