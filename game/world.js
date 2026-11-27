@@ -126,21 +126,47 @@ export function buildWorld(seed) {
   rings[ringCount - 1] = { x: 0, y: 620, z: 58, r: 21, heading: Math.PI };
   rings[ringCount - 2] = { x: -160, y: 1050, z: 74, r: 21, heading: Math.PI * 0.92 };
 
+  // Distant islands: low silhouettes far outside the course, there to
+  // give the horizon something to hold. Purely scenery — the flight
+  // model never sees them — but seeded like everything else.
+  const farIslands = [];
+  for (let i = 0; i < 8; i++) {
+    const ang = (i / 8) * TAU + (rng() - 0.5) * 0.5;
+    const dist = 2700 + rng() * 1500;
+    farIslands.push({
+      x: Math.sin(ang) * dist,
+      y: Math.cos(ang) * dist,
+      r: 320 + rng() * 320,
+      peak: 26 + rng() * 40,
+    });
+  }
+
   // Clouds: flat puffs scattered high, purely scenery, but placed by
-  // the same seed so a staged view always has the same sky.
+  // the same seed so a staged view always has the same sky. Each cloud
+  // carries its own lobe layout, a warm-to-cool tint and a slow drift,
+  // so the sky feels alive without ever changing the course.
   const clouds = [];
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 46; i++) {
+    const lobes = [];
+    const lobeCount = 4 + Math.floor(rng() * 3);
+    for (let k = 0; k < lobeCount; k++) {
+      lobes.push({ ox: (rng() - 0.5) * 1.5, oy: (rng() - 0.5) * 0.3, os: 0.45 + rng() * 0.55 });
+    }
     clouds.push({
       x: (rng() - 0.5) * 5200,
       y: (rng() - 0.5) * 5200,
-      z: 150 + rng() * 90,
-      s: 50 + rng() * 80,
+      z: 150 + rng() * 110,
+      s: 46 + rng() * 92,
+      tint: rng(),
+      drift: 1.5 + rng() * 3.5,
+      lobes,
     });
   }
 
   return {
     seed,
     islands,
+    farIslands,
     runway,
     rings,
     clouds,

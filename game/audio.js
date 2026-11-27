@@ -15,6 +15,7 @@ export class SoundEngine {
     this.muted = false;
     this.engineNodes = null;
     this.stallNodes = null;
+    this.windNodes = null;
   }
 
   // Create the context and the standing engine sound. Safe to call
@@ -49,6 +50,43 @@ export class SoundEngine {
     oscA.start();
     oscB.start();
     this.engineNodes = { oscA, oscB, filter, gain };
+
+    // Wind: a looped buffer of softened (brownish) noise through a
+    // band-pass, silent until setWind gives it something to say. The
+    // brownish tilt keeps it a rush of air rather than a hiss.
+    const wlen = ctx.sampleRate * 2;
+    const wbuf = ctx.createBuffer(1, wlen, ctx.sampleRate);
+    const wdata = wbuf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < wlen; i++) {
+      const white = Math.random() * 2 - 1;
+      last = (last + 0.04 * white) / 1.04;
+      wdata[i] = last * 3.2;
+    }
+    const wsrc = ctx.createBufferSource();
+    wsrc.buffer = wbuf;
+    wsrc.loop = true;
+    const wfilter = ctx.createBiquadFilter();
+    wfilter.type = 'bandpass';
+    wfilter.frequency.value = 480;
+    wfilter.Q.value = 0.7;
+    const wgain = ctx.createGain();
+    wgain.gain.value = 0;
+    wsrc.connect(wfilter);
+    wfilter.connect(wgain);
+    wgain.connect(ctx.destination);
+    wsrc.start();
+    this.windNodes = { filter: wfilter, gain: wgain };
+  }
+
+  // Airflow over the airframe: louder and higher as speed builds,
+  // silent on the ground and when muted.
+  setWind(speedNorm) {
+    if (!this.ctx || !this.windNodes) return;
+    const t = this.ctx.currentTime;
+    const amt = Math.max(0, Math.min(1, speedNorm));
+    this.windNodes.gain.gain.setTargetAtTime(this.muted ? 0 : amt * amt * 0.055, t, 0.15);
+    this.windNodes.filter.frequency.setTargetAtTime(320 + amt * 620, t, 0.2);
   }
 
   // Follow the flight: throttle 0..1, plus the airspeed so a dive with
@@ -68,6 +106,9 @@ export class SoundEngine {
     this.muted = m;
     if (this.ctx && this.engineNodes) {
       this.engineNodes.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.03);
+    }
+    if (this.ctx && this.windNodes) {
+      this.windNodes.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.03);
     }
     if (m) this.setStall(false);
   }
@@ -91,10 +132,16 @@ export class SoundEngine {
     osc.stop(t0 + dur + 0.05);
   }
 
-  // Threading a ring: two bright notes, the second a fifth up.
-  chime() {
+  // Threading a ring: three bright notes climbing, and once a streak
+  // is running (3+) a little triangle arpeggio on top to celebrate it.
+  chime(streak = 1) {
     this.blip(1318, 0, 0.35, 0.12);
     this.blip(1975, 0.07, 0.45, 0.1);
+    this.blip(2637, 0.13, 0.4, 0.05);
+    if (streak >= 3) {
+      this.blip(1568, 0.16, 0.3, 0.06, 'triangle');
+      this.blip(2093, 0.22, 0.38, 0.06, 'triangle');
+    }
   }
 
   // Skimming a ring's rim — close, but no score.
@@ -173,9 +220,10 @@ export class SoundEngine {
     this.blip(64, 0, 0.3, 0.22, 'sine');
   }
 
-  // A good landing earns a small rising figure.
+  // A good landing earns a small rising figure, now grounded on a low
+  // note so the climb feels earned.
   fanfare() {
-    const notes = [523, 659, 784, 1046];
+    const notes = [392, 523, 659, 784, 1046];
     notes.forEach((f, i) => this.blip(f, i * 0.11, 0.4, 0.1, 'triangle'));
   }
 
@@ -183,6 +231,9 @@ export class SoundEngine {
   quiet() {
     if (this.ctx && this.engineNodes) {
       this.engineNodes.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
+    }
+    if (this.ctx && this.windNodes) {
+      this.windNodes.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
     }
     this.setStall(false);
   }

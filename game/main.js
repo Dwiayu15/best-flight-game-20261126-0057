@@ -11,7 +11,7 @@
 // R restarts, Enter starts. Staging for screenshots: ?seed=N picks the
 // course and ?shot=start|play|end jumps straight to a screen.
 
-import { buildWorld, groundHeight } from './world.js';
+import { buildWorld, groundHeight, makeRng } from './world.js';
 import { SoundEngine } from './audio.js';
 
 // ---------------------------------------------------------------- setup
@@ -122,6 +122,7 @@ function resetFlight() {
   state.landingBonus = 0;
   state.timeBonus = 0;
   view = 'cockpit';
+  particles.length = 0;
   snapCamera();
 }
 
@@ -264,6 +265,7 @@ function updateFlight(dt) {
 
   updateRings();
   sound.setEngine(plane.onGround ? plane.throttle * 0.7 : plane.throttle, Math.min(1, plane.speed / 55));
+  sound.setWind(plane.onGround ? 0 : Math.min(1, plane.speed / 55));
 }
 
 // ------------------------------------------------------------- ring logic
@@ -295,7 +297,8 @@ function updateRings() {
       state.score += gained;
       state.nextRing += 1;
       prevRingSide = null;
-      sound.chime();
+      sound.chime(state.streak);
+      spawnBurst(ring.x, ring.y, ring.z, `+${gained}`);
       toast(state.nextRing >= world.rings.length
         ? 'Course complete — bring her home to the strip!'
         : `Ring ${state.nextRing} of ${world.rings.length} — +${gained}`);
@@ -338,6 +341,7 @@ function finishLanding(sink) {
   }
   state.timeBonus = Math.max(0, Math.round((330 - state.elapsed) * 1.5));
   state.score += state.landingBonus + state.timeBonus;
+  spawnConfetti();
   sound.quiet();
   sound.fanfare();
 }
@@ -353,6 +357,124 @@ function endCrash(reason, hard) {
 function toast(text) {
   state.toast = text;
   state.toastUntil = state.time + 3.2;
+}
+
+// ------------------------------------------------------------- particles
+// One small pool for every transient effect: gold sparks and a rising
+// score popup when a ring is threaded, confetti over the strip after a
+// landing, wingtip streamers in a hard bank. All world-space, so they
+// stay put while the camera moves, and all spawned from a fixed-seed
+// generator so a staged view is the same every run.
+const particles = [];
+const fxRng = makeRng(987654321);
+
+function spawnBurst(x, y, z, text) {
+  for (let i = 0; i < 26; i++) {
+    const a = fxRng() * TAU;
+    const b = (fxRng() - 0.5) * Math.PI;
+    const sp = 6 + fxRng() * 13;
+    particles.push({
+      kind: 'spark', x, y, z,
+      vx: Math.cos(a) * Math.cos(b) * sp,
+      vy: Math.sin(a) * Math.cos(b) * sp,
+      vz: Math.sin(b) * sp + 3,
+      age: 0, life: 0.7 + fxRng() * 0.5,
+      size: 1.6 + fxRng() * 2.2,
+    });
+  }
+  if (text) {
+    particles.push({ kind: 'text', x, y, z, vx: 0, vy: 0, vz: 5.5, age: 0, life: 1.25, size: 21, text });
+  }
+}
+
+function spawnConfetti() {
+  const cols = ['#ffd76a', '#ff8a6a', '#8fe08a', '#a8d8ff', '#fff2cf'];
+  for (let i = 0; i < 46; i++) {
+    particles.push({
+      kind: 'confetti',
+      x: plane.x + (fxRng() - 0.5) * 60,
+      y: plane.y + (fxRng() - 0.5) * 60,
+      z: plane.z + 12 + fxRng() * 26,
+      vx: (fxRng() - 0.5) * 6, vy: (fxRng() - 0.5) * 6, vz: -2 - fxRng() * 3,
+      age: 0, life: 2.6 + fxRng() * 1.4,
+      size: 2 + fxRng() * 2.6,
+      color: cols[i % cols.length],
+      spin: fxRng() * TAU,
+    });
+  }
+}
+
+// A pair of soft white puffs at the wingtips, laid while the wing is
+// loaded in a bank — they linger a moment and dissolve.
+function spawnTrail() {
+  const rx = Math.cos(plane.heading);
+  const ry = -Math.sin(plane.heading);
+  for (const sgn of [-1, 1]) {
+    particles.push({
+      kind: 'puff',
+      x: plane.x + rx * 6.5 * sgn, y: plane.y + ry * 6.5 * sgn, z: plane.z + 0.4,
+      vx: 0, vy: 0, vz: 0.4,
+      age: 0, life: 0.55, size: 1.1,
+    });
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.age += dt;
+    if (p.age >= p.life) {
+      particles.splice(i, 1);
+      continue;
+    }
+    if (p.kind === 'spark') p.vz -= 6.5 * dt;
+    if (p.kind === 'confetti') {
+      p.vz = Math.max(p.vz, -3.2);
+      p.spin += dt * 7;
+    }
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.z += p.vz * dt;
+  }
+  if (particles.length > 340) particles.splice(0, particles.length - 340);
+}
+
+function drawParticles(c) {
+  for (const p of particles) {
+    const q = project(c, p.x, p.y, p.z);
+    if (!q) continue;
+    const fade = 1 - p.age / p.life;
+    if (p.kind === 'spark') {
+      const r = Math.max(1, Math.min(6, (p.size * FOCAL) / q.d * 0.5));
+      ctx.fillStyle = `rgba(255,205,90,${0.85 * fade})`;
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, r, 0, TAU);
+      ctx.fill();
+    } else if (p.kind === 'puff') {
+      const r = Math.max(1, Math.min(16, ((1 + (p.age / p.life) * 3) * FOCAL) / q.d * 0.5));
+      ctx.fillStyle = `rgba(255,252,246,${0.26 * fade})`;
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, r, 0, TAU);
+      ctx.fill();
+    } else if (p.kind === 'confetti') {
+      const s = Math.max(2, Math.min(9, (p.size * FOCAL) / q.d * 0.5));
+      ctx.save();
+      ctx.translate(q.x, q.y);
+      ctx.rotate(p.spin);
+      ctx.globalAlpha = Math.min(1, fade * 1.6);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-s / 2, -s / 4, s, s / 2);
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    } else if (p.kind === 'text') {
+      ctx.font = 'bold 22px Georgia, serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = `rgba(20,16,8,${0.55 * fade})`;
+      ctx.fillText(p.text, q.x + 1.5, q.y + 1.5);
+      ctx.fillStyle = `rgba(255,222,130,${fade})`;
+      ctx.fillText(p.text, q.x, q.y);
+    }
+  }
 }
 
 // --------------------------------------------------------------- renderer
@@ -405,15 +527,34 @@ function rr(x, y, w, h, r) {
 }
 
 function drawSkyAndSea(c) {
-  // Sky: a golden-hour gradient, fixed to the screen.
+  // Sky: a layered golden-hour gradient, fixed to the screen — deep
+  // blue up top, through peach and amber to the warm band at the sea.
   const sky = ctx.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, '#2e4a7a');
-  sky.addColorStop(0.42, '#7fa8c9');
-  sky.addColorStop(0.62, '#f2b879');
-  sky.addColorStop(0.78, '#f7cf8e');
+  sky.addColorStop(0, '#274a7d');
+  sky.addColorStop(0.3, '#5d8ab5');
+  sky.addColorStop(0.52, '#a8c3d4');
+  sky.addColorStop(0.66, '#f2c184');
+  sky.addColorStop(0.8, '#f7cf8e');
+  sky.addColorStop(0.92, '#f0a06a');
   sky.addColorStop(1, '#e8906a');
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, W, H);
+
+  // High cirrus: three long, faint streaks sliding almost
+  // imperceptibly across the upper sky.
+  ctx.fillStyle = 'rgba(255,246,235,0.07)';
+  for (let i = 0; i < 3; i++) {
+    const cy = 52 + i * 64;
+    const cx = ((state.time * (2 + i) + i * 470) % (W + 520)) - 260;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 300 - i * 50, 7 + i * 2, 0, 0, TAU);
+    ctx.fill();
+  }
+
+  // The sun, low in the west-northwest — projected like any other far
+  // point so it swings across the sky as you turn.
+  const sunDir = { x: -0.62, y: 0.55, z: 0.22 };
+  const sp = project(c, c.x + sunDir.x * 5000, c.y + sunDir.y * 5000, c.z + sunDir.z * 5000);
 
   // Sea: everything below the horizon line, which pitches and rolls
   // with the plane. Drawn as a rotated half-plane around screen centre.
@@ -422,49 +563,76 @@ function drawSkyAndSea(c) {
   ctx.translate(CX, horizonY);
   ctx.rotate(-c.roll * 0.9);
   const sea = ctx.createLinearGradient(0, 0, 0, H);
-  sea.addColorStop(0, '#e9a05f');
-  sea.addColorStop(0.12, '#4f86a8');
-  sea.addColorStop(0.5, '#2c6489');
-  sea.addColorStop(1, '#173f5e');
+  sea.addColorStop(0, '#eda763');
+  sea.addColorStop(0.1, '#6d9ab5');
+  sea.addColorStop(0.45, '#2f688f');
+  sea.addColorStop(1, '#163d5c');
   ctx.fillStyle = sea;
   ctx.fillRect(-W, 0, W * 2, H * 1.6);
   ctx.restore();
 
-  // The sun, low in the west-northwest, with a warm halo — projected
-  // like any other far point so it swings across the sky as you turn.
-  const sunDir = { x: -0.62, y: 0.55, z: 0.22 };
-  const sp = project(c, c.x + sunDir.x * 5000, c.y + sunDir.y * 5000, c.z + sunDir.z * 5000);
+  // Sun glow and disc, drawn over sky and sea alike: a wide warm halo,
+  // a bright core and a thin rim of light.
   if (sp) {
-    const glow = ctx.createRadialGradient(sp.x, sp.y, 4, sp.x, sp.y, 190);
-    glow.addColorStop(0, 'rgba(255,236,180,0.95)');
-    glow.addColorStop(0.18, 'rgba(255,205,120,0.55)');
-    glow.addColorStop(1, 'rgba(255,190,110,0)');
+    const glow = ctx.createRadialGradient(sp.x, sp.y, 4, sp.x, sp.y, 260);
+    glow.addColorStop(0, 'rgba(255,238,190,0.95)');
+    glow.addColorStop(0.12, 'rgba(255,214,130,0.6)');
+    glow.addColorStop(0.45, 'rgba(255,180,100,0.18)');
+    glow.addColorStop(1, 'rgba(255,180,100,0)');
     ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.arc(sp.x, sp.y, 190, 0, TAU);
+    ctx.arc(sp.x, sp.y, 260, 0, TAU);
     ctx.fill();
-    ctx.fillStyle = '#fff3cf';
+    ctx.fillStyle = '#fff6d8';
     ctx.beginPath();
-    ctx.arc(sp.x, sp.y, 26, 0, TAU);
+    ctx.arc(sp.x, sp.y, 27, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,240,200,0.5)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, 34, 0, TAU);
+    ctx.stroke();
+  }
+
+  // The sun's reflection path: a widening column of light on the water
+  // under the sun, brightest at the horizon and breaking up downward.
+  if (sp && sp.y > horizonY - 130 && horizonY < H) {
+    const top = Math.max(horizonY, 0);
+    const grad = ctx.createLinearGradient(0, top, 0, H);
+    grad.addColorStop(0, 'rgba(255,205,120,0.28)');
+    grad.addColorStop(0.5, 'rgba(255,190,110,0.1)');
+    grad.addColorStop(1, 'rgba(255,190,110,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(sp.x - 26, top);
+    ctx.lineTo(sp.x + 26, top);
+    ctx.lineTo(sp.x + 130, H);
+    ctx.lineTo(sp.x - 130, H);
+    ctx.closePath();
     ctx.fill();
   }
 
   // Sparkle on the water: short dashes that shimmer as time passes,
-  // seeded per dash so they twinkle instead of crawling.
-  ctx.strokeStyle = 'rgba(255,220,160,0.5)';
+  // seeded per dash so they twinkle instead of crawling. Every third
+  // dash clusters along the sun's reflection path.
+  ctx.strokeStyle = 'rgba(255,222,165,0.55)';
   ctx.lineWidth = 2;
   const bandTop = Math.max(0, horizonY + 6);
-  for (let i = 0; i < 64; i++) {
+  for (let i = 0; i < 84; i++) {
     const hx = Math.sin(i * 127.1) * 0.5 + 0.5;
     const hy = Math.sin(i * 311.7) * 0.5 + 0.5;
     const tw = 0.5 + 0.5 * Math.sin(state.time * 2.4 + i * 2.3);
-    if (tw < 0.45) continue;
+    if (tw < 0.42) continue;
     const y = bandTop + hy * hy * (H - bandTop) * 0.85;
-    const x = hx * W + Math.sin(state.time * 0.7 + i) * 6;
-    ctx.globalAlpha = 0.16 + tw * 0.3;
+    let x = hx * W + Math.sin(state.time * 0.7 + i) * 6;
+    if (sp && i % 3 === 0) {
+      const spread = 30 + hy * 150;
+      x = sp.x + Math.sin(i * 57.3) * spread + Math.sin(state.time * 1.3 + i) * 5;
+    }
+    ctx.globalAlpha = 0.14 + tw * 0.32;
     ctx.beginPath();
     ctx.moveTo(x, y);
-    ctx.lineTo(x + 8 + hy * 20, y);
+    ctx.lineTo(x + 8 + hy * 22, y);
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
@@ -473,14 +641,25 @@ function drawSkyAndSea(c) {
 function drawClouds(c) {
   const sorted = [...world.clouds].sort((a, b) => distTo(c, b) - distTo(c, a));
   for (const cl of sorted) {
-    const p = project(c, cl.x, cl.y, cl.z);
-    if (!p || p.d > 4200) continue;
+    // A slow drift eastward, wrapped across the sky so a cloud leaving
+    // one side re-enters on the other, far from the course.
+    const wx = ((cl.x + state.time * cl.drift + 2600) % 5200) - 2600;
+    const p = project(c, wx, cl.y, cl.z);
+    if (!p || p.d > 4400) continue;
     const s = (cl.s / p.d) * FOCAL;
     if (s < 6) continue;
-    ctx.fillStyle = 'rgba(255,244,230,0.75)';
-    for (const [ox, oy, os] of [[0, 0, 1], [-0.7, 0.14, 0.62], [0.72, 0.12, 0.66], [0.1, -0.22, 0.55]]) {
+    // Warm-lit tops over peach-shadowed bellies; each cloud's tint
+    // leans it a little toward rose or toward pearl.
+    const top = cl.tint > 0.5 ? 'rgba(255,250,242,0.85)' : 'rgba(255,244,230,0.8)';
+    const belly = cl.tint > 0.5 ? 'rgba(244,196,160,0.55)' : 'rgba(238,205,180,0.5)';
+    for (const lobe of cl.lobes) {
+      ctx.fillStyle = belly;
       ctx.beginPath();
-      ctx.ellipse(p.x + ox * s, p.y + oy * s * 0.4, s * os, s * os * 0.34, 0, 0, TAU);
+      ctx.ellipse(p.x + lobe.ox * s, p.y + (lobe.oy + 0.1) * s * 0.4, s * lobe.os, s * lobe.os * 0.34, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = top;
+      ctx.beginPath();
+      ctx.ellipse(p.x + lobe.ox * s, p.y + (lobe.oy - 0.04) * s * 0.4, s * lobe.os * 0.92, s * lobe.os * 0.3, 0, 0, TAU);
       ctx.fill();
     }
   }
@@ -516,6 +695,16 @@ function fillPoly(pts, style) {
   ctx.fill();
 }
 
+// Distant silhouettes: hazy blue-grey humps on the horizon, drawn
+// before the real islands so they sit behind everything, softened by
+// the evening air between here and there.
+function drawFarIslands(c) {
+  for (const isl of world.farIslands) {
+    fillPoly(discPoints(c, isl.x, isl.y, 1.2, isl.r, 18), 'rgba(122,150,182,0.3)');
+    fillPoly(discPoints(c, isl.x, isl.y, isl.peak * 0.4, isl.r * 0.55, 18), 'rgba(100,130,168,0.32)');
+  }
+}
+
 function drawIslands(c) {
   const sorted = [...world.islands].sort((a, b) => distTo(c, b) - distTo(c, a));
   for (const isl of sorted) {
@@ -524,6 +713,7 @@ function drawIslands(c) {
     for (const b of isl.blobs) {
       const bx = isl.x + b.dx;
       const by = isl.y + b.dy;
+      fillPoly(discPoints(c, bx, by, 0.35, b.r * 1.07), 'rgba(242,248,248,0.33)');
       fillPoly(discPoints(c, bx, by, 0.7, b.r), '#dfc491');
       fillPoly(discPoints(c, bx, by, 1.6, b.r * 0.86), '#5f9e57');
       if (isl.peak > 5) fillPoly(discPoints(c, bx, by, 1.6 + isl.peak * 0.5, b.r * 0.52), '#487f47');
@@ -601,6 +791,32 @@ function drawRings(c) {
       if (!p) return;
       pts.push(p);
     }
+    // The next ring gets a beacon: a soft pillar of light from the sea
+    // up to the ring, with a pool of light where it meets the water,
+    // so the way on is visible from anywhere on the course.
+    if (isNext) {
+      const base = project(c, ring.x, ring.y, 0.5);
+      const top = project(c, ring.x, ring.y, ring.z);
+      if (base && top) {
+        const hwTop = (ring.r * 0.42 * FOCAL) / Math.max(top.d, 1);
+        const hwBase = (ring.r * 0.42 * FOCAL) / Math.max(base.d, 1);
+        const grad = ctx.createLinearGradient(0, base.y, 0, top.y);
+        grad.addColorStop(0, 'rgba(255,200,90,0.16)');
+        grad.addColorStop(1, 'rgba(255,200,90,0.03)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(base.x - hwBase, base.y);
+        ctx.lineTo(base.x + hwBase, base.y);
+        ctx.lineTo(top.x + hwTop, top.y);
+        ctx.lineTo(top.x - hwTop, top.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,210,110,0.13)';
+        ctx.beginPath();
+        ctx.ellipse(base.x, base.y, hwBase * 1.5, hwBase * 0.4, 0, 0, TAU);
+        ctx.fill();
+      }
+    }
     const pulse = isNext ? 0.72 + 0.28 * Math.sin(state.time * 4) : 1;
     ctx.lineWidth = isNext ? 5 : 3;
     ctx.strokeStyle = done
@@ -615,11 +831,31 @@ function drawRings(c) {
     for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k].x, pts[k].y);
     ctx.stroke();
     ctx.shadowBlur = 0;
+    if (isNext) {
+      // A wide, faint halo pass around the next ring so it glows
+      // against the sky even at a distance.
+      ctx.lineWidth = 11;
+      ctx.strokeStyle = `rgba(255,170,60,${0.13 * pulse})`;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k].x, pts[k].y);
+      ctx.stroke();
+    }
     if (isNext && centre.d > 60) {
       ctx.fillStyle = 'rgba(255,214,110,0.95)';
       ctx.font = 'bold 15px Georgia, serif';
       ctx.textAlign = 'center';
       ctx.fillText(`RING ${i + 1}`, centre.x, centre.y - ring.r * (FOCAL / centre.d) - 10);
+      // A bobbing chevron above the ring, pointing the way in.
+      const bobY = Math.sin(state.time * 3.2) * 4;
+      const cyTop = centre.y - ring.r * (FOCAL / centre.d) - 36 + bobY;
+      ctx.strokeStyle = 'rgba(255,214,110,0.95)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(centre.x - 9, cyTop);
+      ctx.lineTo(centre.x, cyTop + 8);
+      ctx.lineTo(centre.x + 9, cyTop);
+      ctx.stroke();
     }
   });
 }
@@ -640,10 +876,12 @@ function drawPlaneShadow(c) {
 // broad wing, twin floats, a tail held high, and the propeller a
 // shimmering disc at the far end of the fuselage.
 function drawChasePlane() {
-  const bob = Math.sin(state.time * 2.1) * 2.2;
+  // Parked on the water she rides the swell — a slower, deeper bob and
+  // a hint of roll; airborne she just breathes a little.
+  const bob = plane.onGround ? Math.sin(state.time * 1.5) * 3 : Math.sin(state.time * 2.1) * 2.2;
   ctx.save();
   ctx.translate(CX, CY + 88 + bob);
-  ctx.rotate(plane.roll * 0.85);
+  ctx.rotate(plane.roll * 0.85 + (plane.onGround ? Math.sin(state.time * 1.1) * 0.02 : 0));
   const s = 1.0;
   ctx.lineJoin = 'round';
 
@@ -652,6 +890,10 @@ function drawChasePlane() {
   for (const fx of [-34, 34]) {
     rr(fx - 7 * s, 30 * s, 14 * s, 34 * s, 6);
     ctx.fill();
+    ctx.strokeStyle = 'rgba(122,74,43,0.5)';
+    ctx.lineWidth = 1.5;
+    rr(fx - 7 * s, 30 * s, 14 * s, 34 * s, 6);
+    ctx.stroke();
     ctx.strokeStyle = '#7a4a2b';
     ctx.lineWidth = 3;
     ctx.beginPath();
@@ -667,8 +909,37 @@ function drawChasePlane() {
   ctx.fillStyle = wingGrad;
   rr(-118 * s, -16 * s, 236 * s, 17 * s, 8);
   ctx.fill();
-  // Fuselage, tail toward the viewer (wider, lower) and nose away.
-  ctx.fillStyle = '#f0ead9';
+  // Wing struts, two per side, from the fuselage shoulder out to the
+  // wing — the rigging that makes her a proper seaplane.
+  ctx.strokeStyle = '#8a4a30';
+  ctx.lineWidth = 3;
+  for (const sgn of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(sgn * 10, 8);
+    ctx.lineTo(sgn * 56, -12);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(sgn * 10, 8);
+    ctx.lineTo(sgn * 84, -12);
+    ctx.stroke();
+  }
+  // Navigation lights: port red, starboard green, glowing at the tips.
+  for (const [lx, col] of [[-116, '#ff4a3c'], [116, '#3ce06a']]) {
+    ctx.fillStyle = col;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(lx, -9, 3.4, 0, TAU);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  // Fuselage, tail toward the viewer (wider, lower) and nose away,
+  // shaded from sunlit cream on top to a warm shadow at the belly.
+  const bodyGrad = ctx.createLinearGradient(0, -34, 0, 34);
+  bodyGrad.addColorStop(0, '#f7f1de');
+  bodyGrad.addColorStop(0.55, '#efe6cf');
+  bodyGrad.addColorStop(1, '#cdbb96');
+  ctx.fillStyle = bodyGrad;
   ctx.beginPath();
   ctx.moveTo(-13 * s, 26 * s);
   ctx.quadraticCurveTo(-16 * s, -6 * s, -6 * s, -34 * s);
@@ -679,6 +950,10 @@ function drawChasePlane() {
   ctx.fillStyle = '#31556e';
   ctx.beginPath(); // canopy
   ctx.ellipse(0, -14 * s, 7.5 * s, 13 * s, 0, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.35)'; // a streak of sky on the glass
+  ctx.beginPath();
+  ctx.ellipse(-2.4 * s, -19 * s, 2.4 * s, 6.5 * s, 0.25, 0, TAU);
   ctx.fill();
   // Tailplane and fin, close to the camera.
   ctx.fillStyle = '#c94f38';
@@ -693,7 +968,7 @@ function drawChasePlane() {
   // Propeller disc at the nose, spinning with throttle.
   ctx.save();
   ctx.translate(0, -38 * s);
-  ctx.fillStyle = 'rgba(230,230,220,0.18)';
+  ctx.fillStyle = `rgba(230,230,220,${0.1 + plane.throttle * 0.16})`;
   ctx.beginPath();
   ctx.ellipse(0, 0, 30 * s, 7 * s, 0, 0, TAU);
   ctx.fill();
@@ -704,6 +979,15 @@ function drawChasePlane() {
   ctx.moveTo(Math.cos(pa) * -30 * s, Math.sin(pa) * -6 * s);
   ctx.lineTo(Math.cos(pa) * 30 * s, Math.sin(pa) * 6 * s);
   ctx.stroke();
+  ctx.strokeStyle = 'rgba(60,50,40,0.35)';
+  ctx.beginPath();
+  ctx.moveTo(Math.cos(pa + Math.PI / 2) * -30 * s, Math.sin(pa + Math.PI / 2) * -6 * s);
+  ctx.lineTo(Math.cos(pa + Math.PI / 2) * 30 * s, Math.sin(pa + Math.PI / 2) * 6 * s);
+  ctx.stroke();
+  ctx.fillStyle = '#7a4a2b'; // spinner cone at the hub
+  ctx.beginPath();
+  ctx.arc(0, 0, 4.4 * s, 0, TAU);
+  ctx.fill();
   ctx.restore();
   ctx.restore();
 }
@@ -860,7 +1144,7 @@ function drawHUD() {
   ctx.textAlign = 'left';
   ctx.font = 'bold 21px Georgia, serif';
   ctx.fillStyle = 'rgba(10,16,26,0.45)';
-  rr(18, 16, 252, 96, 10);
+  rr(18, 16, 252, 122, 10);
   ctx.fill();
   ctx.fillStyle = '#ffe9b0';
   ctx.fillText(`Score  ${state.score}`, 34, 48);
@@ -869,6 +1153,62 @@ function drawHUD() {
   ctx.fillText(`Rings  ${Math.min(state.nextRing, world.rings.length)} / ${world.rings.length}`, 34, 76);
   const mult = Math.min(3, 1 + 0.25 * Math.max(0, state.streak - 1));
   ctx.fillText(state.streak > 1 ? `Streak ×${mult.toFixed(2)} (${state.streak})` : 'Streak —', 34, 100);
+
+  // Ring progress strip: one dot per ring — solid gold when flown, a
+  // pulsing halo on the next one, a dim hollow for the rest.
+  for (let i = 0; i < world.rings.length; i++) {
+    const dx = 42 + i * 21;
+    const dy = 121;
+    if (i < state.nextRing) {
+      ctx.fillStyle = '#ffd76a';
+      ctx.beginPath();
+      ctx.arc(dx, dy, 5, 0, TAU);
+      ctx.fill();
+    } else if (i === state.nextRing) {
+      const pr = 5 + Math.sin(state.time * 4) * 1.3;
+      ctx.strokeStyle = '#ffd76a';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(dx, dy, pr + 2.5, 0, TAU);
+      ctx.stroke();
+      ctx.fillStyle = '#ffeec4';
+      ctx.beginPath();
+      ctx.arc(dx, dy, 3.4, 0, TAU);
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = 'rgba(220,232,255,0.5)';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(dx, dy, 4.4, 0, TAU);
+      ctx.stroke();
+    }
+  }
+
+  // A little flame beside the panel while a streak is alive, flickering
+  // with the run — the hotter the streak, the taller it dances.
+  if (state.streak >= 2) {
+    const fl = 1 + Math.sin(state.time * 11) * 0.12;
+    ctx.save();
+    ctx.translate(244, 96);
+    ctx.scale(fl, fl * (1 + Math.min(0.35, state.streak * 0.05)));
+    ctx.fillStyle = '#ff9a3c';
+    ctx.beginPath();
+    ctx.moveTo(0, -11);
+    ctx.quadraticCurveTo(7, -2, 5, 4);
+    ctx.quadraticCurveTo(3.5, 10, 0, 10);
+    ctx.quadraticCurveTo(-3.5, 10, -5, 4);
+    ctx.quadraticCurveTo(-7, -2, 0, -11);
+    ctx.fill();
+    ctx.fillStyle = '#ffd76a';
+    ctx.beginPath();
+    ctx.moveTo(0, -3);
+    ctx.quadraticCurveTo(3.6, 1.5, 2.4, 5.4);
+    ctx.quadraticCurveTo(1.2, 8.4, 0, 8.4);
+    ctx.quadraticCurveTo(-2.4, 7, -2.2, 4.4);
+    ctx.quadraticCurveTo(-2, 0.5, 0, -3);
+    ctx.fill();
+    ctx.restore();
+  }
 
   // Clock and heading, top right / top centre.
   ctx.textAlign = 'right';
@@ -955,6 +1295,32 @@ function drawHUD() {
   }
 }
 
+// Speed lines: past about 38 m/s the air itself starts to show —
+// short streaks rushing outward past the edges of the view, faster
+// and thicker the harder she is pushed.
+function drawSpeedLines() {
+  if (state.mode !== 'flying' || plane.onGround) return;
+  const over = (plane.speed - 38) / 24;
+  if (over <= 0) return;
+  const alpha = Math.min(0.5, over * 0.55);
+  ctx.strokeStyle = 'rgba(255,250,240,1)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 14; i++) {
+    const ang = i * 2.399 + Math.sin(i * 12.9) * 0.4; // golden-angle spread
+    const phase = (state.time * 1.6 + i * 0.618) % 1;
+    const r0 = 190 + phase * 330;
+    const len = 26 + phase * 46;
+    const x0 = CX + Math.cos(ang) * r0;
+    const y0 = CY - 30 + Math.sin(ang) * r0 * 0.62;
+    ctx.globalAlpha = alpha * (1 - phase * 0.6);
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x0 + Math.cos(ang) * len, y0 + Math.sin(ang) * len * 0.62);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
 // --------------------------------------------------------------- screens
 function panel(w, h) {
   ctx.fillStyle = 'rgba(12,16,28,0.78)';
@@ -968,8 +1334,23 @@ function panel(w, h) {
 
 function drawTitle() {
   ctx.textAlign = 'center';
+  // Twinkling motes of light around the title, as if the evening air
+  // itself were celebrating.
+  for (let i = 0; i < 7; i++) {
+    const sx = CX + Math.sin(i * 91.7) * 330;
+    const sy = 96 + (Math.sin(i * 47.3) * 0.5 + 0.5) * 90;
+    const tw = 0.5 + 0.5 * Math.sin(state.time * 2.2 + i * 1.7);
+    ctx.fillStyle = `rgba(255,240,200,${0.25 + tw * 0.55})`;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 1.6 + tw * 1.6, 0, TAU);
+    ctx.fill();
+  }
   ctx.font = 'bold 64px Georgia, serif';
-  ctx.fillStyle = '#fff2cf';
+  const tg = ctx.createLinearGradient(0, 108, 0, 172);
+  tg.addColorStop(0, '#fff8e2');
+  tg.addColorStop(0.55, '#ffe9b0');
+  tg.addColorStop(1, '#f7b955');
+  ctx.fillStyle = tg;
   ctx.shadowColor = 'rgba(0,0,0,0.55)';
   ctx.shadowBlur = 14;
   ctx.fillText('Golden Hour Ring Run', CX, 168);
@@ -977,6 +1358,12 @@ function drawTitle() {
   ctx.font = 'italic 21px Georgia, serif';
   ctx.fillStyle = '#ffe4ae';
   ctx.fillText('a seaplane, ten gold rings, and one strip of runway to come home to', CX, 206);
+  ctx.strokeStyle = 'rgba(255,215,130,0.65)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(CX - 210, 224);
+  ctx.lineTo(CX + 210, 224);
+  ctx.stroke();
   panel(620, 252);
   ctx.font = '18px Georgia, serif';
   ctx.fillStyle = '#e8eefc';
@@ -999,6 +1386,16 @@ function drawEndScreen() {
   ctx.textAlign = 'center';
   panel(600, 330);
   if (state.mode === 'landed') {
+    // A drift of gold sparkles around the panel — she made it home.
+    for (let i = 0; i < 9; i++) {
+      const sx = CX + Math.sin(i * 77.3) * 270;
+      const sy = CY - 130 + (Math.sin(i * 39.1) * 0.5 + 0.5) * 240;
+      const tw = 0.5 + 0.5 * Math.sin(state.time * 2.6 + i * 2.1);
+      ctx.fillStyle = `rgba(255,230,150,${0.2 + tw * 0.5})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 1.5 + tw * 1.8, 0, TAU);
+      ctx.fill();
+    }
     ctx.font = 'bold 40px Georgia, serif';
     ctx.fillStyle = '#b8f0ae';
     ctx.fillText('Down and home.', CX, CY - 118);
@@ -1078,6 +1475,13 @@ function frame(ts) {
   if (state.mode === 'flying' && !state.paused) updateFlight(dt);
   else if (state.mode === 'title') plane.propAngle += dt * 2;
 
+  if (!state.paused) {
+    updateParticles(dt);
+    if (state.mode === 'flying' && !plane.onGround && plane.speed > 26 && Math.abs(plane.roll) > 0.28) {
+      spawnTrail();
+    }
+  }
+
   // Camera choice.
   let c;
   if (state.mode === 'title') {
@@ -1112,9 +1516,12 @@ function frame(ts) {
   setBasis(c);
   drawSkyAndSea(c);
   drawClouds(c);
+  drawFarIslands(c);
   drawIslands(c);
   drawRunway(c);
   drawRings(c);
+  drawParticles(c);
+  drawSpeedLines();
   if (state.mode !== 'title') drawPlaneShadow(c);
 
   if (state.mode === 'title') {
